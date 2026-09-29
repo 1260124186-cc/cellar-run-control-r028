@@ -35,6 +35,19 @@ type pairView struct {
 	Vessel vesselView `json:"vessel"`
 }
 
+type tokenView struct {
+	TokenID   string     `json:"token_id"`
+	Caller    string     `json:"caller"`
+	State     string     `json:"state"`
+	ExpiresAt time.Time  `json:"expires_at"`
+	RevokedAt *time.Time `json:"revoked_at"`
+}
+
+type issuedTokenView struct {
+	tokenView
+	Token string `json:"token"`
+}
+
 func createFormulaPayload(name string) map[string]any {
 	return map[string]any{
 		"name":                    name,

@@ -12,6 +12,7 @@ import (
 
 type client struct {
 	baseURL string
+	token   string
 	http    *http.Client
 }
 
@@ -35,6 +36,18 @@ func (c *client) call(
 	payload any,
 	expectedVersion *int64,
 ) (response, error) {
+	return c.callWithToken(method, path, payload, expectedVersion, c.token)
+}
+
+// callWithToken issues a request with an explicit bearer token; pass an
+// empty token to send no Authorization header at all.
+func (c *client) callWithToken(
+	method string,
+	path string,
+	payload any,
+	expectedVersion *int64,
+	token string,
+) (response, error) {
 	var body io.Reader
 	if payload != nil {
 		encoded, err := json.Marshal(payload)
@@ -50,6 +63,9 @@ func (c *client) call(
 	if payload != nil {
 		request.Header.Set("Content-Type", "application/json")
 	}
+	if token != "" {
+		request.Header.Set("Authorization", "Bearer "+token)
+	}
 	if expectedVersion != nil {
 		request.Header.Set("X-Expected-Version", fmt.Sprintf("%d", *expectedVersion))
 	}
@@ -63,6 +79,47 @@ func (c *client) call(
 		return response{}, fmt.Errorf("read response: %w", err)
 	}
 	return response{status: raw.StatusCode, body: content}, nil
+}
+
+// callWithRawAuthorization issues a request with an exact Authorization
+// header value, used to verify malformed-scheme handling.
+func (c *client) callWithRawAuthorization(method, path, authorization string) (response, error) {
+	request, err := http.NewRequest(method, c.baseURL+path, nil)
+	if err != nil {
+		return response{}, fmt.Errorf("create request: %w", err)
+	}
+	request.Header.Set("Authorization", authorization)
+	raw, err := c.http.Do(request)
+	if err != nil {
+		return response{}, fmt.Errorf("perform request: %w", err)
+	}
+	defer raw.Body.Close()
+	content, err := io.ReadAll(io.LimitReader(raw.Body, 2<<20))
+	if err != nil {
+		return response{}, fmt.Errorf("read response: %w", err)
+	}
+	return response{status: raw.StatusCode, body: content}, nil
+}
+
+// registerCaller issues a fresh token and stores it so subsequent calls are
+// authenticated.
+func (c *client) registerCaller(name string) error {
+	registered, err := c.call("POST", "/v1/tokens", map[string]any{"caller": name}, nil)
+	if err != nil {
+		return err
+	}
+	if err := requireStatus(registered, http.StatusCreated, "register workflow caller"); err != nil {
+		return err
+	}
+	var issued issuedTokenView
+	if err := registered.decode(&issued); err != nil {
+		return err
+	}
+	if issued.Token == "" {
+		return fmt.Errorf("register workflow caller: response did not include a token")
+	}
+	c.token = issued.Token
+	return nil
 }
 
 func (r response) decode(target any) error {

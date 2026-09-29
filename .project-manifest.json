@@ -26,7 +26,7 @@
     {
       "id": "service",
       "path": "internal/service",
-      "responsibility": "orchestrate formulas, vessels, runs, and observations"
+      "responsibility": "orchestrate formulas, vessels, runs, observations, and caller tokens"
     },
     {
       "id": "storage",
@@ -107,6 +107,27 @@
       "success": "returns computed metrics and a vessel in cleaning state",
       "failure": "returns a stable range, sequence, time, state, or count error",
       "verification": "the check issues real HTTP requests and rejects malformed observations",
+      "module_ids": [
+        "httpapi",
+        "service",
+        "domain",
+        "storage"
+      ]
+    },
+    {
+      "id": "token-lifecycle",
+      "name": "Register, verify, revoke, expire, and persist caller tokens",
+      "entry": "POST /v1/tokens",
+      "steps": [
+        "register a caller and receive a presented token once",
+        "verify the token and call a business route with it",
+        "observe stable missing, malformed, invalid, expired, and revoked errors",
+        "revoke while concurrent requests are in flight",
+        "restart on the same data directory and confirm token state survives"
+      ],
+      "success": "valid tokens authenticate callers and survive a restart",
+      "failure": "missing, malformed, unknown, expired, and revoked tokens return stable 401 codes",
+      "verification": "the check issues real HTTP requests, including a concurrent revocation burst and a real process restart",
       "module_ids": [
         "httpapi",
         "service",

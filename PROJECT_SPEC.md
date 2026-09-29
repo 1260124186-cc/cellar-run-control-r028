@@ -174,8 +174,11 @@ The domain package does not import outer packages.
 
 ## API Behavior
 
-All business routes are JSON under `/v1`. A successful write returns the
-updated aggregate and its version. A failed write returns:
+All business routes are JSON under `/v1`. Every business route requires a
+local bearer token that identifies the calling client; `GET /healthz` and
+the token administration routes under `/v1/tokens` stay unauthenticated.
+A successful write returns the updated aggregate and its version. A failed
+write returns:
 
 ```json
 {
@@ -191,9 +194,31 @@ rejects a stale write instead of overwriting newer state.
 
 `GET /healthz` returns process health and the current snapshot revision.
 
+### Caller Tokens
+
+Callers authenticate with `Authorization: Bearer <token>`, where a token is
+`<token_id>.<secret>`. Registration (`POST /v1/tokens`, body
+`{"caller": "...", "ttl_seconds": n}` with optional TTL) returns the token
+exactly once; the snapshot stores only the SHA-256 hash of the secret.
+Caller names are normalized and case-folded, and each caller holds one
+active token. Revocation (`POST /v1/tokens/{id}/revoke`) marks the record
+revoked and releases the caller name for re-registration; verification
+(`POST /v1/tokens/verify`) returns the caller of a valid token;
+`GET /v1/tokens` lists records without secret material.
+
+Authentication failures are stable HTTP 401 responses: `token_missing`,
+`token_malformed`, `token_invalid`, `token_expired`, and `token_revoked`.
+Unknown tokens are 404 `token_not_found`; duplicate callers are 409
+`token_caller_conflict`; revoking twice is 409 `invalid_token_state`.
+Token records live in the same revisioned snapshot as business state and
+survive restarts. The token check reads one consistent snapshot, so a
+committed revocation rejects every request authenticated after it while
+concurrent requests admitted earlier may still proceed.
+
 ## Persistence And Concurrency
 
-The configured data directory contains `state.json`. Writes are serialized by
+The configured data directory contains `state.json`, including all issued
+caller token records and the active-caller index. Writes are serialized by
 an in-process mutex. The complete state is encoded, committed to durable
 storage, and then atomically renamed over the target. An update is not
 published in memory unless persistence succeeds.
@@ -210,13 +235,14 @@ task owns systematic tests for validation boundaries, state transitions,
 numeric calculations, stale revisions, storage failures, and concurrent
 reservation attempts.
 
-The current build command is `go build ./...`. Three bounded production checks
-start the real HTTP handler, issue real JSON requests, check success and failure
-behavior, and exit without external services:
+The current build command is `go build ./...`. Four bounded production
+checks start the real HTTP handler, issue real JSON requests, check success
+and failure behavior, and exit without external services:
 
 - `go run ./cmd/fermentctl check formula-approval`
 - `go run ./cmd/fermentctl check vessel-run-lifecycle`
 - `go run ./cmd/fermentctl check observations-completion`
+- `go run ./cmd/fermentctl check token-lifecycle`
 
 ## Scope Limits
 

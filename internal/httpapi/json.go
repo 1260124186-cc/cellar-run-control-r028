@@ -72,6 +72,9 @@ func writeDomainError(response http.ResponseWriter, err error) {
 		body.Field = domainErr.Field
 		status = statusForCode(domainErr.Code)
 	}
+	if status == http.StatusUnauthorized {
+		response.Header().Set("WWW-Authenticate", "Bearer")
+	}
 	writeJSON(response, status, errorResponse{Error: body})
 }
 
@@ -79,16 +82,22 @@ func statusForCode(code domain.Code) int {
 	switch code {
 	case domain.CodeInvalidInput:
 		return http.StatusBadRequest
-	case domain.CodeFormulaNotFound, domain.CodeVesselNotFound, domain.CodeRunNotFound:
+	case domain.CodeFormulaNotFound, domain.CodeVesselNotFound,
+		domain.CodeRunNotFound, domain.CodeTokenNotFound:
 		return http.StatusNotFound
 	case domain.CodeFormulaNameConflict, domain.CodeFormulaState,
 		domain.CodeFormulaInUse, domain.CodeVesselConflict,
 		domain.CodeVesselUnavailable, domain.CodeVesselState,
 		domain.CodeRunConflict, domain.CodeRunState,
-		domain.CodeObservationConflict:
+		domain.CodeObservationConflict, domain.CodeTokenCallerConflict,
+		domain.CodeTokenState:
 		return http.StatusConflict
 	case domain.CodeRevisionConflict:
 		return http.StatusPreconditionFailed
+	case domain.CodeTokenMissing, domain.CodeTokenMalformed,
+		domain.CodeTokenInvalid, domain.CodeTokenExpired,
+		domain.CodeTokenRevoked:
+		return http.StatusUnauthorized
 	case domain.CodeStorage:
 		return http.StatusInternalServerError
 	default:

@@ -37,6 +37,8 @@ Environment variables:
 
 - `CELLAR_CONTROL_ADDR`: HTTP listen address.
 - `CELLAR_CONTROL_DATA_DIR`: directory containing `state.json`.
+- `CELLAR_CONTROL_TOKEN_TTL`: default token lifetime as a Go duration (for
+  example `12h` or `720h`); defaults to 24h, clamped at 30 days.
 
 Example:
 
@@ -64,6 +66,13 @@ internal/workflowcheck         real HTTP production checks
 Health:
 
 - `GET /healthz`
+
+Token administration (open local endpoints, like health):
+
+- `POST /v1/tokens`
+- `GET /v1/tokens`
+- `POST /v1/tokens/verify`
+- `POST /v1/tokens/{id}/revoke`
 
 Formula workflow:
 
@@ -107,6 +116,55 @@ shape:
 }
 ```
 
+## Caller Authentication
+
+Every business route (formulas, vessels, runs) requires a bearer token:
+
+```
+Authorization: Bearer tok_0f8e60ba98f78b08fedb.2f9c...e64
+```
+
+Register a caller to receive a token once. The presented secret is shown
+only in that response; the snapshot stores just its SHA-256 hash:
+
+```bash
+curl -X POST http://127.0.0.1:8088/v1/tokens \
+  -H 'Content-Type: application/json' \
+  -d '{"caller":"cellar-operator","ttl_seconds":86400}'
+```
+
+`ttl_seconds` is optional (1 to 2592000); when omitted the configured
+default lifetime applies. Caller names are trimmed and matched case
+insensitively; a caller can hold one active token, so re-registration
+requires revocation first. Revocation keeps the record (so the precise
+revoked error is returned) and releases the caller name. `GET /v1/tokens`
+lists records without any secret material, and `POST /v1/tokens/verify`
+checks the presented token and returns its caller.
+
+Authentication failures are stable and return HTTP 401 with a
+`WWW-Authenticate: Bearer` header:
+
+| Code | When |
+| --- | --- |
+| `token_missing` | no `Authorization` header on a business route |
+| `token_malformed` | wrong scheme, extra fields, or token outside the issued format |
+| `token_invalid` | well-formed token whose identifier or secret does not match |
+| `token_expired` | token passed its expiry time |
+| `token_revoked` | token was revoked |
+
+`token_not_found` is 404, while duplicate registration is 409
+`token_caller_conflict` and revoking twice is 409 `invalid_token_state`.
+The authenticated caller record is attached to the request context so any
+business handler can identify who is calling.
+
+Tokens are stored in the same revisioned snapshot as business state, so
+they survive restarts. A request is authorized at the point its token
+check reads the snapshot; revocation is serialized in the same store, so
+requests authenticated before it commits proceed and every later request
+is rejected as revoked. `GET /healthz` and the token administration routes
+remain unauthenticated; they are intended, like the service itself, for a
+trusted local network or internal adapter.
+
 ## Workflow Checks
 
 Run each production workflow check separately:
@@ -115,6 +173,7 @@ Run each production workflow check separately:
 go run ./cmd/fermentctl check formula-approval
 go run ./cmd/fermentctl check vessel-run-lifecycle
 go run ./cmd/fermentctl check observations-completion
+go run ./cmd/fermentctl check token-lifecycle
 ```
 
 Each check creates a temporary snapshot directory, starts the real HTTP
@@ -159,6 +218,8 @@ state transitions, concurrency, persistence failures, and numeric edge cases.
 
 ## Scope
 
-The service does not control physical equipment, authenticate remote users,
-send notifications, expose a browser interface, or replicate data across
-processes. It is intended for a trusted local network or an internal adapter.
+The service does not control physical equipment, connect to a remote
+identity provider, send notifications, expose a browser interface, or
+replicate data across processes. Token administration endpoints rely on
+local network trust; there are no roles beyond caller identity. It is
+intended for a trusted local network or an internal adapter.

@@ -18,6 +18,7 @@ const (
 type Config struct {
 	Address           string
 	DataDir           string
+	TokenTTL          time.Duration
 	ReadHeaderTimeout time.Duration
 	ReadTimeout       time.Duration
 	WriteTimeout      time.Duration
@@ -35,6 +36,14 @@ func FromEnv() (Config, error) {
 		IdleTimeout:       60 * time.Second,
 		ShutdownTimeout:   10 * time.Second,
 	}
+	if raw := strings.TrimSpace(os.Getenv("CELLAR_CONTROL_TOKEN_TTL")); raw != "" {
+		parsed, err := time.ParseDuration(raw)
+		if err != nil {
+			return Config{}, fmt.Errorf(
+				"CELLAR_CONTROL_TOKEN_TTL must be a duration such as 24h: %w", err)
+		}
+		cfg.TokenTTL = parsed
+	}
 	return cfg.Validate()
 }
 
@@ -46,6 +55,9 @@ func (c Config) Validate() (Config, error) {
 	}
 	if c.DataDir == "" {
 		return Config{}, fmt.Errorf("data directory cannot be empty")
+	}
+	if c.TokenTTL < 0 {
+		return Config{}, fmt.Errorf("token TTL must be positive when set")
 	}
 	absolute, err := filepath.Abs(c.DataDir)
 	if err != nil {

@@ -69,6 +69,9 @@ func normalizeSnapshot(value domain.Snapshot) (domain.Snapshot, error) {
 	if value.Runs == nil {
 		value.Runs = map[string]domain.FermentationRun{}
 	}
+	if value.Tokens == nil {
+		value.Tokens = map[string]domain.AuthToken{}
+	}
 	if value.NameIndex == nil {
 		value.NameIndex = map[string]string{}
 	}
@@ -77,6 +80,9 @@ func normalizeSnapshot(value domain.Snapshot) (domain.Snapshot, error) {
 	}
 	if value.RunIndex == nil {
 		value.RunIndex = map[string]string{}
+	}
+	if value.CallerIndex == nil {
+		value.CallerIndex = map[string]string{}
 	}
 	if err := validateIndexes(value); err != nil {
 		return domain.Snapshot{}, err
@@ -118,7 +124,27 @@ func validateIndexes(value domain.Snapshot) error {
 		}
 		expectedRuns[run.Code] = id
 	}
-	return compareIndexes("run code", value.RunIndex, expectedRuns)
+	if err := compareIndexes("run code", value.RunIndex, expectedRuns); err != nil {
+		return err
+	}
+
+	// The caller index tracks exactly the tokens that have not been revoked.
+	// Expiry is time-dependent, so it cannot be part of a load-time invariant.
+	expectedCallers := make(map[string]string, len(value.Tokens))
+	for id, token := range value.Tokens {
+		key := domain.NameKey(token.Caller)
+		if key == "" {
+			return fmt.Errorf("token %s has an empty normalized caller", id)
+		}
+		if token.RevokedAt != nil {
+			continue
+		}
+		if existing, found := expectedCallers[key]; found && existing != id {
+			return fmt.Errorf("caller token index contains a duplicate caller")
+		}
+		expectedCallers[key] = id
+	}
+	return compareIndexes("caller token", value.CallerIndex, expectedCallers)
 }
 
 func compareIndexes(label string, actual, expected map[string]string) error {

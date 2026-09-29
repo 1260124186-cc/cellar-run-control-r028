@@ -61,7 +61,7 @@ func serve() error {
 	if err != nil {
 		return err
 	}
-	app := service.New(store, clock.System{})
+	app := service.New(store, clock.System{}, cfg.TokenTTL)
 	server := &http.Server{
 		Addr:              cfg.Address,
 		Handler:           httpapi.NewHandler(app),

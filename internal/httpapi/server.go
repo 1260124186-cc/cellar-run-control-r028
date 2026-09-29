@@ -8,6 +8,7 @@ import (
 
 func NewHandler(app *service.Service) http.Handler {
 	mux := http.NewServeMux()
+	registerTokenRoutes(mux, app)
 	registerFormulaRoutes(mux, app)
 	registerVesselRoutes(mux, app)
 	registerRunRoutes(mux, app)
@@ -17,7 +18,7 @@ func NewHandler(app *service.Service) http.Handler {
 			"revision": app.Revision(),
 		})
 	})
-	return withRecovery(mux)
+	return withRecovery(withAuthentication(app, mux))
 }
 
 func withRecovery(next http.Handler) http.Handler {

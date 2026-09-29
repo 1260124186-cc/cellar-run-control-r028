@@ -23,6 +23,14 @@ const (
 	CodeObservationConflict Code = "observation_conflict"
 	CodeRevisionConflict    Code = "revision_conflict"
 	CodeStorage             Code = "storage_error"
+	CodeTokenMissing        Code = "token_missing"
+	CodeTokenMalformed      Code = "token_malformed"
+	CodeTokenInvalid        Code = "token_invalid"
+	CodeTokenExpired        Code = "token_expired"
+	CodeTokenRevoked        Code = "token_revoked"
+	CodeTokenNotFound       Code = "token_not_found"
+	CodeTokenCallerConflict Code = "token_caller_conflict"
+	CodeTokenState          Code = "invalid_token_state"
 )
 
 type Error struct {
