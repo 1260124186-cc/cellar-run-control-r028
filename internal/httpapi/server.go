@@ -7,10 +7,20 @@ import (
 )
 
 func NewHandler(app *service.Service) http.Handler {
+	// Business mux holds every route that requires an authenticated caller.
+	business := http.NewServeMux()
+	registerFormulaRoutes(business, app)
+	registerVesselRoutes(business, app)
+	registerRunRoutes(business, app)
+	registerAuthenticatedCallerRoutes(business, app)
+	guarded := withAuthentication(app, business)
+
 	mux := http.NewServeMux()
-	registerFormulaRoutes(mux, app)
-	registerVesselRoutes(mux, app)
-	registerRunRoutes(mux, app)
+	// Enrollment is special: it is unauthenticated only for the one-time
+	// bootstrap and enforces authentication itself afterwards.
+	registerEnrollmentRoute(mux, app)
+	// The subtree match delegates every remaining /v1 route to the guard.
+	mux.Handle("/v1/", guarded)
 	mux.HandleFunc("GET /healthz", func(response http.ResponseWriter, _ *http.Request) {
 		writeJSON(response, http.StatusOK, map[string]any{
 			"status":   "ok",

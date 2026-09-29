@@ -89,6 +89,13 @@ func statusForCode(code domain.Code) int {
 		return http.StatusConflict
 	case domain.CodeRevisionConflict:
 		return http.StatusPreconditionFailed
+	case domain.CodeAuthMissing, domain.CodeAuthMalformed, domain.CodeTokenUnknown,
+		domain.CodeTokenExpired, domain.CodeTokenRevoked:
+		return http.StatusUnauthorized
+	case domain.CodeCallerNotFound:
+		return http.StatusNotFound
+	case domain.CodeCallerNameConflict, domain.CodeCallersEstablished:
+		return http.StatusConflict
 	case domain.CodeStorage:
 		return http.StatusInternalServerError
 	default:

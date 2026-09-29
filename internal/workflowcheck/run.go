@@ -12,37 +12,75 @@ import (
 )
 
 func Run(name string) error {
+	switch name {
+	case "local-token-auth":
+		return localTokenAuth()
+	case "formula-approval", "vessel-run-lifecycle", "observations-completion":
+		return runBusinessCheck(name)
+	default:
+		return fmt.Errorf("unknown workflow check %q", name)
+	}
+}
+
+func runBusinessCheck(name string) error {
 	dataDir, err := os.MkdirTemp("", "cellar-run-check-*")
 	if err != nil {
 		return fmt.Errorf("create check directory: %w", err)
 	}
 	defer os.RemoveAll(dataDir)
 
-	store, err := storage.Open(dataDir)
+	server, err := startServer(dataDir, clock.System{})
 	if err != nil {
 		return err
 	}
-	app := service.New(store, clock.System{})
-	server := httptest.NewServer(httpapi.NewHandler(app))
 	defer server.Close()
+
 	api := newClient(server.URL)
+	if err := bootstrapCheckCaller(api, "workflow-check"); err != nil {
+		return err
+	}
 
 	switch name {
 	case "formula-approval":
-		if err := formulaApproval(api); err != nil {
-			return err
-		}
+		err = formulaApproval(api)
 	case "vessel-run-lifecycle":
-		if err := vesselRunLifecycle(api); err != nil {
-			return err
-		}
+		err = vesselRunLifecycle(api)
 	case "observations-completion":
-		if err := observationsCompletion(api); err != nil {
-			return err
-		}
-	default:
-		return fmt.Errorf("unknown workflow check %q", name)
+		err = observationsCompletion(api)
+	}
+	if err != nil {
+		return err
 	}
 	fmt.Printf("workflow check passed: %s\n", name)
+	return nil
+}
+
+func startServer(dataDir string, timeSource clock.Clock) (*httptest.Server, error) {
+	store, err := storage.Open(dataDir)
+	if err != nil {
+		return nil, err
+	}
+	app := service.New(store, timeSource)
+	return httptest.NewServer(httpapi.NewHandler(app)), nil
+}
+
+func bootstrapCheckCaller(api *client, name string) error {
+	response, err := api.call("POST", "/v1/callers", map[string]any{
+		"name": name,
+	}, nil)
+	if err != nil {
+		return err
+	}
+	if err := requireStatus(response, 201, "bootstrap check caller"); err != nil {
+		return err
+	}
+	var enrollment enrollmentView
+	if err := response.decode(&enrollment); err != nil {
+		return err
+	}
+	if enrollment.Token == "" || enrollment.Caller.ID == "" {
+		return errInvalidWorkflow("bootstrap enrollment did not return a token or caller id")
+	}
+	api.setToken(enrollment.Token)
 	return nil
 }

@@ -78,6 +78,15 @@ func normalizeSnapshot(value domain.Snapshot) (domain.Snapshot, error) {
 	if value.RunIndex == nil {
 		value.RunIndex = map[string]string{}
 	}
+	if value.Callers == nil {
+		value.Callers = map[string]domain.Caller{}
+	}
+	if value.TokenIndex == nil {
+		value.TokenIndex = map[string]string{}
+	}
+	if value.CallerNameIdx == nil {
+		value.CallerNameIdx = map[string]string{}
+	}
 	if err := validateIndexes(value); err != nil {
 		return domain.Snapshot{}, err
 	}
@@ -118,7 +127,30 @@ func validateIndexes(value domain.Snapshot) error {
 		}
 		expectedRuns[run.Code] = id
 	}
-	return compareIndexes("run code", value.RunIndex, expectedRuns)
+	if err := compareIndexes("run code", value.RunIndex, expectedRuns); err != nil {
+		return err
+	}
+
+	expectedTokens := make(map[string]string, len(value.Callers))
+	expectedCallerNames := make(map[string]string, len(value.Callers))
+	for id, caller := range value.Callers {
+		if err := caller.Validate(); err != nil {
+			return fmt.Errorf("caller %s is invalid: %w", id, err)
+		}
+		if existing, found := expectedTokens[caller.TokenSHA256]; found && existing != id {
+			return fmt.Errorf("caller token index contains a duplicate hash")
+		}
+		expectedTokens[caller.TokenSHA256] = id
+		nameKey := domain.NameKey(caller.Name)
+		if existing, found := expectedCallerNames[nameKey]; found && existing != id {
+			return fmt.Errorf("caller name index contains a duplicate key")
+		}
+		expectedCallerNames[nameKey] = id
+	}
+	if err := compareIndexes("caller token", value.TokenIndex, expectedTokens); err != nil {
+		return err
+	}
+	return compareIndexes("caller name", value.CallerNameIdx, expectedCallerNames)
 }
 
 func compareIndexes(label string, actual, expected map[string]string) error {

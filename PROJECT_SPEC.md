@@ -97,6 +97,28 @@ time, gravity, temperature, optional note, and receipt time.
 - Gravity must not rise more than 0.010 above the immediately preceding value.
 - Observation sequences are contiguous and start at 1.
 
+### Caller And Token
+
+A caller represents one local integration script or operator. It contains an
+identifier, normalized display name, the SHA-256 hash of its bearer token, the
+issuing caller, issuance and expiration times, and optional revocation time and
+revoking caller.
+
+- The raw token has the shape `cellar_` followed by 40 lowercase hexadecimal
+  characters generated from 20 random bytes. Only the SHA-256 hash is stored;
+  the raw token is returned exactly once at enrollment.
+- The first enrollment (`POST /v1/callers` with no credentials) is allowed only
+  while the caller registry is empty, bootstrapping the system. The closure of
+  that window and the first write happen in the same atomic mutation.
+- After bootstrap, every enrollment requires an unexpired, unrevoked caller.
+- Token lifetime defaults to 30 days and may be requested between 1 second and
+  365 days.
+- Caller names are required, at most 120 characters, and unique after case
+  folding and whitespace normalization.
+- Revocation is idempotent. A revoked or expired token is never valid again.
+- Callers, hashes, and indexes are part of the persisted snapshot and survive
+  process restarts. A corrupted caller record stops startup, like other state.
+
 ## Connected Workflows
 
 ### 1. Formula Approval
@@ -150,16 +172,41 @@ transitions return stable failures without changing persisted state.
 This path crosses HTTP protocol handling, application orchestration, numeric
 domain rules, and snapshot storage.
 
+### 4. Local Token Authentication
+
+Public entry points are:
+
+- `POST /v1/callers`
+- `GET /v1/callers`
+- `GET /v1/callers/me`
+- `GET /v1/callers/{id}`
+- `POST /v1/callers/{id}/revoke`
+
+The first caller is enrolled without a token on an empty system. Every later
+request uses `Authorization: Bearer <token>`. The caller enrolls another
+caller, reads its own identity, watches an expired token fail, revokes a
+token while concurrent requests run, and restarts the process to confirm the
+revocation persisted. Missing headers, malformed schemes or token shapes,
+unknown tokens, expired tokens, and revoked tokens return distinct stable
+codes without leaking which callers exist beyond the generic unknown-token
+failure.
+
+This path crosses HTTP middleware, application orchestration, credential
+validation, and snapshot storage.
+
 ## Modules
 
 - `cmd/fermentctl`: executable entry point for the HTTP service and bounded
   workflow checks.
 - `internal/config`: environment and command-line configuration.
 - `internal/clock`: deterministic clock boundary for production and checks.
-- `internal/domain`: entities, validation, state transitions, and metrics.
-- `internal/service`: use-case orchestration and revision coordination.
+- `internal/domain`: entities, validation, state transitions, metrics, and
+  caller token records.
+- `internal/service`: use-case orchestration, revision coordination, caller
+  enrollment, authentication, and revocation.
 - `internal/storage`: snapshot repository, atomic replacement, and locking.
-- `internal/httpapi`: routing, strict JSON decoding, error mapping, and health.
+- `internal/httpapi`: routing, bearer-token middleware, strict JSON decoding,
+  error mapping, and health.
 - `internal/workflowcheck`: real HTTP workflow checks used by the executable.
 
 The dependency direction is:
@@ -174,8 +221,22 @@ The domain package does not import outer packages.
 
 ## API Behavior
 
-All business routes are JSON under `/v1`. A successful write returns the
-updated aggregate and its version. A failed write returns:
+All business routes are JSON under `/v1`. Except for the one-time bootstrap
+enrollment when no caller exists, every `/v1` route requires
+`Authorization: Bearer <token>`. Authenticated responses carry the resolved
+`X-Caller-ID`. Authentication failures use HTTP 401 with stable codes:
+
+- `authentication_required`: no Authorization header was supplied.
+- `malformed_authorization`: the scheme is not Bearer or the token shape is
+  invalid.
+- `token_unknown`: no caller matches the supplied token.
+- `token_expired`: the token reached its expiration time.
+- `token_revoked`: the token was revoked.
+
+`GET /healthz` is not under `/v1` and stays unauthenticated.
+
+A successful write returns the updated aggregate and its version. A failed
+write returns:
 
 ```json
 {
@@ -196,7 +257,15 @@ rejects a stale write instead of overwriting newer state.
 The configured data directory contains `state.json`. Writes are serialized by
 an in-process mutex. The complete state is encoded, committed to durable
 storage, and then atomically renamed over the target. An update is not
-published in memory unless persistence succeeds.
+published in memory unless persistence succeeds. Caller records, token-hash
+and caller-name indexes live in the same snapshot, so enrolling or revoking a
+token is atomic with revision bumps and follows the same durability and crash
+rules as business writes.
+
+Authentication reads a copied caller through the store read lock while
+revocation takes the write lock, so concurrent requests see a consistent
+result: a request cannot authenticate after the revocation commit, and
+requests serialized before the commit may still succeed.
 
 Reads use copied values and never expose repository-owned maps or slices. The
 default address is `127.0.0.1:8088`, the request body limit is 1 MiB, and all
@@ -217,10 +286,12 @@ behavior, and exit without external services:
 - `go run ./cmd/fermentctl check formula-approval`
 - `go run ./cmd/fermentctl check vessel-run-lifecycle`
 - `go run ./cmd/fermentctl check observations-completion`
+- `go run ./cmd/fermentctl check local-token-auth`
 
 ## Scope Limits
 
 This service does not control physical equipment, connect to a remote identity
 provider, send notifications, expose a browser interface, replicate data, or
-replace laboratory measurements. The API is intended for a trusted local
-network or an internal adapter.
+replace laboratory measurements. Authentication is a local bearer-token
+registry with no external identity integration; the API is intended for a
+trusted local network or an internal adapter.

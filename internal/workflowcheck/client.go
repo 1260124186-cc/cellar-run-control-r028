@@ -12,11 +12,13 @@ import (
 
 type client struct {
 	baseURL string
+	token   string
 	http    *http.Client
 }
 
 type response struct {
 	status int
+	header http.Header
 	body   []byte
 }
 
@@ -29,7 +31,23 @@ func newClient(baseURL string) *client {
 	}
 }
 
+func (c *client) setToken(token string) {
+	c.token = token
+}
+
 func (c *client) call(
+	method string,
+	path string,
+	payload any,
+	expectedVersion *int64,
+) (response, error) {
+	return c.callAs(c.token, method, path, payload, expectedVersion)
+}
+
+// callAs issues a request with an explicit bearer token; an empty token means
+// no Authorization header is sent.
+func (c *client) callAs(
+	token string,
 	method string,
 	path string,
 	payload any,
@@ -50,6 +68,9 @@ func (c *client) call(
 	if payload != nil {
 		request.Header.Set("Content-Type", "application/json")
 	}
+	if token != "" {
+		request.Header.Set("Authorization", "Bearer "+token)
+	}
 	if expectedVersion != nil {
 		request.Header.Set("X-Expected-Version", fmt.Sprintf("%d", *expectedVersion))
 	}
@@ -62,7 +83,45 @@ func (c *client) call(
 	if err != nil {
 		return response{}, fmt.Errorf("read response: %w", err)
 	}
-	return response{status: raw.StatusCode, body: content}, nil
+	return response{status: raw.StatusCode, header: raw.Header, body: content}, nil
+}
+
+// callRawAuth issues a request with an exact Authorization header value,
+// including malformed values; an empty string omits the header entirely.
+func (c *client) callRawAuth(
+	method string,
+	path string,
+	payload any,
+	authorization string,
+) (response, error) {
+	var body io.Reader
+	if payload != nil {
+		encoded, err := json.Marshal(payload)
+		if err != nil {
+			return response{}, fmt.Errorf("encode request: %w", err)
+		}
+		body = bytes.NewReader(encoded)
+	}
+	request, err := http.NewRequest(method, c.baseURL+path, body)
+	if err != nil {
+		return response{}, fmt.Errorf("create request: %w", err)
+	}
+	if payload != nil {
+		request.Header.Set("Content-Type", "application/json")
+	}
+	if authorization != "" {
+		request.Header.Set("Authorization", authorization)
+	}
+	raw, err := c.http.Do(request)
+	if err != nil {
+		return response{}, fmt.Errorf("perform request: %w", err)
+	}
+	defer raw.Body.Close()
+	content, err := io.ReadAll(io.LimitReader(raw.Body, 2<<20))
+	if err != nil {
+		return response{}, fmt.Errorf("read response: %w", err)
+	}
+	return response{status: raw.StatusCode, header: raw.Header, body: content}, nil
 }
 
 func (r response) decode(target any) error {

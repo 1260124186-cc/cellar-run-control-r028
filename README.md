@@ -63,7 +63,15 @@ internal/workflowcheck         real HTTP production checks
 
 Health:
 
-- `GET /healthz`
+- `GET /healthz` (no authentication)
+
+Caller and token administration:
+
+- `POST /v1/callers` (unauthenticated only for the one-time first caller)
+- `GET /v1/callers`
+- `GET /v1/callers/me`
+- `GET /v1/callers/{id}`
+- `POST /v1/callers/{id}/revoke`
 
 Formula workflow:
 
@@ -107,6 +115,54 @@ shape:
 }
 ```
 
+## Local Token Authentication
+
+Every `/v1` business route requires a bearer token:
+
+```text
+Authorization: Bearer cellar_0123456789abcdef0123456789abcdef01234567
+```
+
+Enroll the first caller on an empty data directory (the bootstrap token is
+returned exactly once and never stored in plain text):
+
+```bash
+curl -sS -X POST http://127.0.0.1:8088/v1/callers \
+  -H 'Content-Type: application/json' \
+  -d '{"name":"cellar-operator"}'
+```
+
+The response contains the caller record, the raw `token`, and
+`expires_in_seconds`. Use the returned token for every later call, including
+enrolling additional callers:
+
+```bash
+TOKEN='cellar_...'
+
+curl -sS http://127.0.0.1:8088/v1/callers/me \
+  -H "Authorization: Bearer $TOKEN"
+
+curl -sS -X POST http://127.0.0.1:8088/v1/callers \
+  -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"name":"production-script","ttl_seconds":86400}'
+
+curl -sS -X POST http://127.0.0.1:8088/v1/callers/cli_xxxxxxxxxxxxxxxxxxxx/revoke \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+- `ttl_seconds` is optional (default 30 days; accepted range 1 second to 365
+  days).
+- Only the SHA-256 hash of each token is persisted in `state.json`.
+- Revocation is idempotent and immediately visible to concurrent requests.
+- `GET /healthz` remains unauthenticated.
+
+Stable HTTP 401 error codes are `authentication_required`,
+`malformed_authorization`, `token_unknown`, `token_expired`, and
+`token_revoked`. Authenticated responses also carry an `X-Caller-ID` header.
+If every token is lost, access is recovered by editing the data directory out
+of band; there is intentionally no remote identity integration.
+
 ## Workflow Checks
 
 Run each production workflow check separately:
@@ -115,6 +171,7 @@ Run each production workflow check separately:
 go run ./cmd/fermentctl check formula-approval
 go run ./cmd/fermentctl check vessel-run-lifecycle
 go run ./cmd/fermentctl check observations-completion
+go run ./cmd/fermentctl check local-token-auth
 ```
 
 Each check creates a temporary snapshot directory, starts the real HTTP
@@ -130,8 +187,14 @@ the result over the previous snapshot. The in-memory snapshot is replaced only
 after that operation succeeds.
 
 On startup, an existing snapshot is decoded and normalized. Unknown or
-conflicting map indexes are not silently invented; invalid JSON or a negative
-revision stops the process before HTTP serving begins.
+conflicting map indexes are not silently invented; invalid JSON, a negative
+revision, or a corrupted caller record stops the process before HTTP serving
+begins. Caller records and token-hash indexes are stored in the same snapshot,
+so enrolled, expired, and revoked tokens survive restarts.
+
+Authentication reads and revocations share the store's read/write lock: once a
+revocation is committed and durable, no later request can authenticate with
+that token.
 
 ## Repair-Ready Boundaries
 
@@ -159,6 +222,7 @@ state transitions, concurrency, persistence failures, and numeric edge cases.
 
 ## Scope
 
-The service does not control physical equipment, authenticate remote users,
-send notifications, expose a browser interface, or replicate data across
-processes. It is intended for a trusted local network or an internal adapter.
+The service does not control physical equipment, connect to a remote identity
+provider, send notifications, expose a browser interface, or replicate data
+across processes. Authentication is a self-contained local bearer-token
+registry intended for a trusted local network or an internal adapter.

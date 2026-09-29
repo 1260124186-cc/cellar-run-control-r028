@@ -21,12 +21,12 @@
     {
       "id": "domain",
       "path": "internal/domain",
-      "responsibility": "entities, validation, state transitions, and metrics"
+      "responsibility": "entities, validation, state transitions, metrics, and caller tokens"
     },
     {
       "id": "service",
       "path": "internal/service",
-      "responsibility": "orchestrate formulas, vessels, runs, and observations"
+      "responsibility": "orchestrate formulas, vessels, runs, observations, and caller enrollment"
     },
     {
       "id": "storage",
@@ -107,6 +107,27 @@
       "success": "returns computed metrics and a vessel in cleaning state",
       "failure": "returns a stable range, sequence, time, state, or count error",
       "verification": "the check issues real HTTP requests and rejects malformed observations",
+      "module_ids": [
+        "httpapi",
+        "service",
+        "domain",
+        "storage"
+      ]
+    },
+    {
+      "id": "local-token-auth",
+      "name": "Bootstrap a caller, authenticate requests, expire and revoke tokens",
+      "entry": "POST /v1/callers",
+      "steps": [
+        "enroll the first caller without credentials while the registry is empty",
+        "authenticate business routes with the issued bearer token",
+        "register additional callers and read the caller identity",
+        "observe token expiry, malformed headers, and unknown-token failures",
+        "revoke a token under concurrent requests and restart the process"
+      ],
+      "success": "an active caller reaches every /v1 route and the caller id is returned",
+      "failure": "missing, malformed, unknown, expired, and revoked tokens return stable 401 codes",
+      "verification": "the check issues real HTTP requests across a clock, concurrency, and a restart",
       "module_ids": [
         "httpapi",
         "service",
